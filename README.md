@@ -1,167 +1,256 @@
-# Spring Boot Shopping Cart Web App
+Spring Boot Shopping Cart Web App
+=================================
 
-## About
+Overview
+--------
 
-This is a demo project for practicing Spring + Thymeleaf. The idea was to build some basic shopping cart web app.
+This project demonstrates how to set up and run a Continuous Integration and Continuous Deployment (CI/CD) pipeline using **Jenkins**, leveraging a pre-existing Spring Boot Shopping Cart Web App codebase. The application features a login and registration system, shopping cart functionality with session persistence, and a transactional checkout process.
 
-It was made using **Spring Boot**, **Spring Security**, **Thymeleaf**, **Spring Data JPA**, **Spring Data REST and Docker**. 
-Database is in memory **H2**.
+The web app is built using:
 
-There is a login and registration functionality included.
+-   **Spring Boot**
 
-Users can shop for products. Each user has his own shopping cart (session functionality).
-Checkout is transactional.
+-   **Spring Security**
 
-## Configuration
+-   **Thymeleaf**
+
+-   **Spring Data JPA**
+
+-   **Spring Data REST**
+
+-   **Docker**
+
+The backend is powered by an in-memory **H2 Database**.
+
+* * * * *
+
+Configuration
+-------------
 
 ### Configuration Files
 
-Folder **src/resources/** contains config files for **shopping-cart** Spring Boot application.
+The configuration files for the application are located in the **src/resources/** directory:
 
-* **src/resources/application.properties** - main configuration file. Here it is possible to change admin username/password,
-as well as change the port number.
+-   **application.properties**: The main configuration file. You can modify admin credentials and port number here.
 
-## How to run
+* * * * *
 
-There are several ways to run the application. You can run it from the command line with included Maven Wrapper, Maven or Docker. 
+CI/CD Pipeline Using Jenkins
+----------------------------
 
-Once the app starts, go to the web browser and visit `http://localhost:8070/home`
+### Jenkins Setup
 
-Admin username: **admin**
+1.  **Install Jenkins**:
 
-Admin password: **admin**
+    -   Set up Jenkins on a local Ubuntu system.
 
-User username: **user**
+2.  **Install Necessary Plugins**:
 
-User password: **password**
+    -   Plugins installed include:
 
-### Maven Wrapper
+        -   SonarQube
 
-#### Using the Maven Plugin
+        -   Docker (Docker Commons, Docker API plugin, Docker Pipeline, Docker Build Step, CloudBees Docker Build and Publish Plugin)
 
-Go to the root folder of the application and type:
-```bash
-$ chmod +x scripts/mvnw
-$ scripts/mvnw spring-boot:run
+        -   OWASP Dependency Check Plugin
+
+        -   JRE (Eclipse Temurin installer Plugin)
+
+3.  **Configure Tools and Credentials**:
+
+    -   Configured tools (e.g., Maven, SonarQube, Docker).
+
+    -   Set up credentials for GitHub, Docker Hub, SonarQube, and others.
+
+### Pipeline Stages
+
+#### 1\. Git Checkout
+
+Clones the repository from GitHub:
+
+```
+stage ("Git Checkout") {
+    steps {
+        git branch: 'main', changelog: false, credentialsId: 'eda9997a-e4a4-47e8-9238-c00d9edfd7fa', poll: false, url: 'https://github.com/puremike/Ekart-jenkins.git'
+    }
+}
 ```
 
-#### Using Executable Jar
+#### 2\. Compile Code
 
-Or you can build the JAR file with 
-```bash
-$ scripts/mvnw clean package
-``` 
+Compiles the application without running tests:
 
-Then you can run the JAR file:
-```bash
-$ java -jar target/shopping-cart-0.0.1-SNAPSHOT.jar
 ```
+stage ("Compile") {
+    steps {
+        sh "mvn clean compile -DskipTests=true"
+    }
+}
+```
+
+#### 3\. OWASP Dependency Check
+
+Performs a security check for dependencies:
+
+```
+stage ("OWASP DP-Check") {
+    steps {
+        dependencyCheck additionalArguments: "--scan ./ --format HTML", odcInstallation: "dp"
+        dependencyCheckPublisher pattern: "**/dependency-check-report.xml"
+    }
+}
+```
+
+#### 4\. SonarQube Configuration
+
+Configures and runs SonarQube for code analysis:
+
+1.  **Setup**:
+
+    -   Pulled the SonarQube Docker image and ran it locally:
+
+        ```
+        docker run --name sonar -p 9000:9000 sonarqube:lts-community
+        ```
+
+    -   Logged into `localhost:9000` with default credentials and generated an API token.
+
+2.  **Pipeline**:
+
+    ```
+    stage ("Sonar Config") {
+        steps {
+            withSonarQubeEnv('sonar-server') {
+                sh """ ${SCANNER_HOME}/bin/sonar-scanner\
+                    -Dsonar.projectKey=Shopping-Cart\
+                    -Dsonar.projectName=Shopping-Cart\
+                    -Dsonar.sources=.\
+                    -Dsonar.java.binaries=target/classes
+                """
+            }
+        }
+    }
+    ```
+
+#### 5\. Maven Build
+
+Packages the application:
+
+```
+stage ("mvn-build") {
+    steps {
+        sh "mvn clean package -DskipTests=true"
+    }
+}
+```
+
+#### 6\. Docker Build and Push
+
+Builds a Docker image and pushes it to Docker Hub:
+
+```
+stage ("docker-build") {
+    steps {
+        withDockerRegistry(credentialsId: '45a2af58-4171-482a-adff-2e7834d47008', url:"") {
+            sh "docker build -t scophee/shopping-cart-ekart:1.0 -f docker/Dockerfile ."
+            sh "docker push scophee/shopping-cart-ekart:1.0"
+        }
+    }
+}
+```
+
+#### 7\. Docker Deployment
+
+Deploys the application using Docker:
+
+```
+stage ("docker deploy") {
+    steps {
+        withDockerRegistry(credentialsId: '45a2af58-4171-482a-adff-2e7834d47008', url:"") {
+            sh "docker run -d --name shoping-c -p 8070:8070 scophee/shopping-cart-ekart:1.0"
+        }
+    }
+}
+```
+
+### Complete Pipeline Script
+
+```
+pipeline {
+    agent any
+    tools {
+        jdk "jdk" // Configured JDK tool name in Jenkins
+        maven "maven" // Configured Maven tool name in Jenkins
+    }
+    environment {
+        SCANNER_HOME = tool 'sonar-scanner' // Configured SonarQube tool name in Jenkins
+    }
+    stages {
+        stage ("Git Checkout") { ... }
+        stage ("Compile") { ... }
+        stage ("OWASP DP-Check") { ... }
+        stage ("Sonar Config") { ... }
+        stage ("mvn-build") { ... }
+        stage ("docker-build") { ... }
+        stage ("docker deploy") { ... }
+    }
+}
+```
+
+* * * * *
+
+How to Run Locally
+------------------
 
 ### Maven
 
-Open a terminal and run the following commands to ensure that you have valid versions of Java and Maven installed:
-
-```bash
-$ java -version
-java version "1.8.0_102"
-Java(TM) SE Runtime Environment (build 1.8.0_102-b14)
-Java HotSpot(TM) 64-Bit Server VM (build 25.102-b14, mixed mode)
-```
-
-```bash
-$ mvn -v
-Apache Maven 3.3.9 (bb52d8502b132ec0a5a3f4c09453c07478323dc5; 2015-11-10T16:41:47+00:00)
-Maven home: /usr/local/Cellar/maven/3.3.9/libexec
-Java version: 1.8.0_102, vendor: Oracle Corporation
-```
+To run the application locally, use the Maven Wrapper or Maven CLI:
 
 #### Using the Maven Plugin
 
-The Spring Boot Maven plugin includes a run goal that can be used to quickly compile and run your application. 
-Applications run in an exploded form, as they do in your IDE. 
-The following example shows a typical Maven command to run a Spring Boot application:
- 
-```bash
+```
 $ mvn spring-boot:run
-``` 
+```
 
-#### Using Executable Jar
+#### Building and Running the JAR File
 
-To create an executable jar run:
-
-```bash
+```
 $ mvn clean package
-``` 
-
-To run that application, use the java -jar command, as follows:
-
-```bash
 $ java -jar target/shopping-cart-0.0.1-SNAPSHOT.jar
 ```
 
-To exit the application, press **ctrl-c**.
-
 ### Docker
 
-It is possible to run **shopping-cart** using Docker:
+Build and run the application using Docker:
 
-Build Docker image:
-```bash
+```
 $ mvn clean package
 $ docker build -t shopping-cart:dev -f docker/Dockerfile .
+$ docker run --rm -i -p 8070:8070 --name shopping-cart shopping-cart:dev
 ```
 
-Run Docker container:
-```bash
-$ docker run --rm -i -p 8070:8070 \
-      --name shopping-cart \
-      shopping-cart:dev
-```
+* * * * *
 
-##### Helper script
+Additional Resources
+--------------------
 
-It is possible to run all of the above with helper script:
+### H2 Database Console
 
-```bash
-$ chmod +x scripts/run_docker.sh
-$ scripts/run_docker.sh
-```
+Access the database console at `http://localhost:8070/h2-console` and use the following credentials:
 
-## Docker 
-
-Folder **docker** contains:
-
-* **docker/shopping-cart/Dockerfile** - Docker build file for executing shopping-cart Docker image. 
-Instructions to build artifacts, copy build artifacts to docker image and then run app on proper port with proper configuration file.
-
-## Util Scripts
-
-* **scripts/run_docker.sh.sh** - util script for running shopping-cart Docker container using **docker/Dockerfile**
-
-## Tests
-
-Tests can be run by executing following command from the root of the project:
-
-```bash
-$ mvn test
-```
-
-## Helper Tools
+-   **JDBC URL**: `jdbc:h2:mem:shopping_cart_db`
 
 ### HAL REST Browser
 
-Go to the web browser and visit `http://localhost:8070/`
+Access the REST API browser at `http://localhost:8070/`.
 
-You will need to be authenticated to be able to see this page.
+* * * * *
 
-### H2 Database web interface
+Testing
+-------
 
-Go to the web browser and visit `http://localhost:8070/h2-console`
+Run tests using Maven:
 
-In field **JDBC URL** put 
 ```
-jdbc:h2:mem:shopping_cart_db
+$ mvn test
 ```
-
-In `/src/main/resources/application.properties` file it is possible to change both
-web interface url path, as well as the datasource url.
